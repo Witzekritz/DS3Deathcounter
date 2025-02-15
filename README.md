@@ -8,5 +8,5 @@ A simple death counter for Dark Souls III that reads the death count directly fr
 3. Run go build
 ## Usage
 1. Start Dark Souls III
-2. Run the ds3deathcounter executable
+2. Run the dsdeathcounter executable
 3. Open http://localhost:8080 or add http://localhost:8080 as a Browser Source in OBS
