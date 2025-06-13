@@ -47,9 +47,7 @@ The counter will automatically detect which game is running and display the appr
 
 1. Add a new Browser source to your scene
 2. Set the URL to http://localhost:8080
-3. Set width and height as needed (recommended minimum: 300x100)
-4. Check "Refresh browser when scene becomes active"
-5. Optionally enable "Shutdown source when not visible" to save resources
+3. Set width and height as needed (recommended: 300x100)
 
 ## License
 
