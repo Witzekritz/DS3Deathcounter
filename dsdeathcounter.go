@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"strings"
 	"syscall"
 	"time"
 	"unsafe"
@@ -12,167 +13,258 @@ import (
 )
 
 const (
-	PROCESS_VM_READ           = 0x0010
-	PROCESS_QUERY_INFORMATION = 0x0400
-	DS3_BASE_ADDR            = 0x47572B8
-	DS3_OFFSET               = 0x98
+    PROCESS_VM_READ           = 0x0010
+    PROCESS_QUERY_INFORMATION = 0x0400
 )
 
+// Game defines memory locations for each supported game
+type Game struct {
+    Name      string
+    ProcessName string
+    Offsets32 []int64
+    Offsets64 []int64
+}
+
+// All supported games with their memory offsets
+var supportedGames = []Game{
+    {
+        Name:      "Dark Souls",
+        ProcessName: "DARKSOULS",
+        Offsets32: []int64{0xF78700, 0x5C},
+        Offsets64: nil,
+    },
+    {
+        Name:      "Dark Souls II",
+        ProcessName: "DarkSoulsII",
+        Offsets32: []int64{0x1150414, 0x74, 0xB8, 0x34, 0x4, 0x28C, 0x100},
+        Offsets64: []int64{0x16148F0, 0xD0, 0x490, 0x104},
+    },
+    {
+        Name:      "Dark Souls III",
+        ProcessName: "DarkSoulsIII",
+        Offsets32: nil,
+        Offsets64: []int64{0x47572B8, 0x98},
+    },
+    {
+        Name:      "Dark Souls Remastered",
+        ProcessName: "DarkSoulsRemastered",
+        Offsets32: nil,
+        Offsets64: []int64{0x1C8A530, 0x98},
+    },
+    {
+        Name:      "sekiro",
+        ProcessName: "sekiro",
+        Offsets32: nil,
+        Offsets64: []int64{0x3D5AAC0, 0x90},
+    },
+}
+
 var (
-	kernel32              = windows.NewLazyDLL("kernel32.dll")
-	procReadProcessMemory = kernel32.NewProc("ReadProcessMemory")
+    kernel32              = windows.NewLazyDLL("kernel32.dll")
+    procReadProcessMemory = kernel32.NewProc("ReadProcessMemory")
+    procIsWow64Process    = kernel32.NewProc("IsWow64Process")
 )
 
 func readProcessMemory(process windows.Handle, baseAddress uintptr, size uint) ([]byte, error) {
-	var read uintptr
-	buf := make([]byte, size)
-	ret, _, err := procReadProcessMemory.Call(
-		uintptr(process),
-		baseAddress,
-		uintptr(unsafe.Pointer(&buf[0])),
-		uintptr(size),
-		uintptr(unsafe.Pointer(&read)),
-	)
-	if ret == 0 {
-		return nil, fmt.Errorf("ReadProcessMemory failed: %v", err)
-	}
-	if read != uintptr(size) {
-		return nil, fmt.Errorf("partial read: got %d bytes, expected %d", read, size)
-	}
-	return buf, nil
+    var read uintptr
+    buf := make([]byte, size)
+    ret, _, err := procReadProcessMemory.Call(
+        uintptr(process),
+        baseAddress,
+        uintptr(unsafe.Pointer(&buf[0])),
+        uintptr(size),
+        uintptr(unsafe.Pointer(&read)),
+    )
+    if ret == 0 {
+        return nil, fmt.Errorf("ReadProcessMemory failed: %v", err)
+    }
+    if read != uintptr(size) {
+        return nil, fmt.Errorf("partial read: got %d bytes, expected %d", read, size)
+    }
+    return buf, nil
+}
+
+func isWow64Process(process windows.Handle) (bool, error) {
+    var isWow64 bool
+    ret, _, err := procIsWow64Process.Call(
+        uintptr(process),
+        uintptr(unsafe.Pointer(&isWow64)),
+    )
+    if ret == 0 {
+        return false, fmt.Errorf("IsWow64Process failed: %v", err)
+    }
+    return isWow64, nil
 }
 
 func getModuleBaseAddress(processID uint32, moduleName string) (uintptr, error) {
-	snapshot, err := windows.CreateToolhelp32Snapshot(windows.TH32CS_SNAPMODULE|windows.TH32CS_SNAPMODULE32, processID)
-	if err != nil {
-		return 0, err
-	}
-	defer windows.CloseHandle(snapshot)
+    snapshot, err := windows.CreateToolhelp32Snapshot(windows.TH32CS_SNAPMODULE|windows.TH32CS_SNAPMODULE32, processID)
+    if err != nil {
+        return 0, err
+    }
+    defer windows.CloseHandle(snapshot)
 
-	var me windows.ModuleEntry32
-	me.Size = uint32(unsafe.Sizeof(me))
+    var me windows.ModuleEntry32
+    me.Size = uint32(unsafe.Sizeof(me))
 
-	err = windows.Module32First(snapshot, &me)
-	if err != nil {
-		return 0, err
-	}
+    err = windows.Module32First(snapshot, &me)
+    if err != nil {
+        return 0, err
+    }
 
-	for {
-		if windows.UTF16ToString(me.Module[:]) == moduleName {
-			return uintptr(me.ModBaseAddr), nil
-		}
-		err = windows.Module32Next(snapshot, &me)
-		if err != nil {
-			if err == syscall.ERROR_NO_MORE_FILES {
-				return 0, fmt.Errorf("module %s not found", moduleName)
-			}
-			return 0, err
-		}
-	}
+    for {
+        if windows.UTF16ToString(me.Module[:]) == moduleName {
+            return uintptr(me.ModBaseAddr), nil
+        }
+        err = windows.Module32Next(snapshot, &me)
+        if err != nil {
+            if err == syscall.ERROR_NO_MORE_FILES {
+                return 0, fmt.Errorf("module %s not found", moduleName)
+            }
+            return 0, err
+        }
+    }
 }
 
-func findDS3Process() (windows.Handle, uint32, error) {
-	snapshot, err := windows.CreateToolhelp32Snapshot(windows.TH32CS_SNAPPROCESS, 0)
-	if err != nil {
-		return 0, 0, err
-	}
-	defer windows.CloseHandle(snapshot)
+func findGameProcess() (windows.Handle, uint32, *Game, error) {
+    snapshot, err := windows.CreateToolhelp32Snapshot(windows.TH32CS_SNAPPROCESS, 0)
+    if err != nil {
+        return 0, 0, nil, err
+    }
+    defer windows.CloseHandle(snapshot)
 
-	var pe windows.ProcessEntry32
-	pe.Size = uint32(unsafe.Sizeof(pe))
+    var pe windows.ProcessEntry32
+    pe.Size = uint32(unsafe.Sizeof(pe))
 
-	err = windows.Process32First(snapshot, &pe)
-	if err != nil {
-		return 0, 0, err
-	}
+    err = windows.Process32First(snapshot, &pe)
+    if err != nil {
+        return 0, 0, nil, err
+    }
 
-	for {
-		if windows.UTF16ToString(pe.ExeFile[:]) == "DarkSoulsIII.exe" {
-			process, err := windows.OpenProcess(PROCESS_VM_READ|PROCESS_QUERY_INFORMATION, false, pe.ProcessID)
-			if err != nil {
-				return 0, 0, err
-			}
-			return process, pe.ProcessID, nil
-		}
+    for {
+        processName := windows.UTF16ToString(pe.ExeFile[:])
+        processName = strings.TrimSuffix(processName, ".exe")
+        
+        for i := range supportedGames {
+            if processName == supportedGames[i].ProcessName {
+                process, err := windows.OpenProcess(PROCESS_VM_READ|PROCESS_QUERY_INFORMATION, false, pe.ProcessID)
+                if err != nil {
+                    log.Printf("Found %s but could not open process: %v", supportedGames[i].Name, err)
+                    continue
+                }
+                return process, pe.ProcessID, &supportedGames[i], nil
+            }
+        }
 
-		err = windows.Process32Next(snapshot, &pe)
-		if err != nil {
-			if err == syscall.ERROR_NO_MORE_FILES {
-				return 0, 0, fmt.Errorf("Dark Souls III process not found")
-			}
-			return 0, 0, err
-		}
-	}
+        err = windows.Process32Next(snapshot, &pe)
+        if err != nil {
+            if err == syscall.ERROR_NO_MORE_FILES {
+                return 0, 0, nil, fmt.Errorf("no supported game process found")
+            }
+            return 0, 0, nil, err
+        }
+    }
 }
 
-func getDeathCount(process windows.Handle, processID uint32) (int32, error) {
-	// Get the base address of the module
-	baseAddr, err := getModuleBaseAddress(processID, "DarkSoulsIII.exe")
-	if err != nil {
-		return 0, fmt.Errorf("failed to get module base address: %v", err)
-	}
+func getDeathCount(process windows.Handle, processID uint32, game *Game) (int32, error) {
+    // Check if process is 32-bit or 64-bit
+    isWow64, err := isWow64Process(process)
+    if err != nil {
+        return 0, fmt.Errorf("failed to determine process architecture: %v", err)
+    }
 
-	// Calculate the absolute address
-	targetAddr := baseAddr + uintptr(DS3_BASE_ADDR)
-	
-	//log.Printf("Reading from base address: 0x%X", targetAddr)
+    // Get appropriate offsets for architecture
+    var offsets []int64
+    if isWow64 {
+        if game.Offsets32 == nil {
+            return 0, fmt.Errorf("%s doesn't support 32-bit version", game.Name)
+        }
+        offsets = game.Offsets32
+    } else {
+        if game.Offsets64 == nil {
+            return 0, fmt.Errorf("%s doesn't support 64-bit version", game.Name)
+        }
+        offsets = game.Offsets64
+    }
 
-	// Read pointer at base address
-	baseData, err := readProcessMemory(process, targetAddr, 8)
-	if err != nil {
-		return 0, fmt.Errorf("failed to read base pointer: %v", err)
-	}
+    // Get the base address of the module
+    baseAddr, err := getModuleBaseAddress(processID, game.ProcessName+".exe")
+    if err != nil {
+        return 0, fmt.Errorf("failed to get module base address: %v", err)
+    }
 
-	// Get pointer from base address
-	basePointer := *(*int64)(unsafe.Pointer(&baseData[0]))
-	if basePointer == 0 {
-		return 0, fmt.Errorf("null pointer read from base address")
-	}
+    // Follow pointer chain
+    address := int64(baseAddr)
+    for i, offset := range offsets {
+        address += offset
+        
+        if i < len(offsets)-1 {
+            // Read pointer
+            pointerData, err := readProcessMemory(process, uintptr(address), 8)
+            if err != nil {
+                return 0, fmt.Errorf("failed to read pointer at offset %d: %v", i, err)
+            }
+            
+            // Interpret based on architecture
+            if isWow64 {
+                address = int64(*(*int32)(unsafe.Pointer(&pointerData[0])))
+            } else {
+                address = *(*int64)(unsafe.Pointer(&pointerData[0]))
+            }
+            
+            if address == 0 {
+                return 0, fmt.Errorf("null pointer encountered at offset %d", i)
+            }
+        }
+    }
 
-	//log.Printf("Read pointer: 0x%X", basePointer)
-	
-	// Read final value using offset
-	finalAddr := uintptr(basePointer + DS3_OFFSET)
-	//log.Printf("Reading final value from: 0x%X", finalAddr)
+    // Read final value (death count)
+    deathData, err := readProcessMemory(process, uintptr(address), 4)
+    if err != nil {
+        return 0, fmt.Errorf("failed to read death count: %v", err)
+    }
 
-	deathData, err := readProcessMemory(process, finalAddr, 4)
-	if err != nil {
-		return 0, fmt.Errorf("failed to read death count: %v", err)
-	}
-
-	return *(*int32)(unsafe.Pointer(&deathData[0])), nil
+    return *(*int32)(unsafe.Pointer(&deathData[0])), nil
 }
 
 func main() {
-	var currentDeaths int32
+    var currentDeaths int32
+    var currentGameName string = "No game detected"
 
-	// Start update goroutine
-	go func() {
-		for {
-			process, processID, err := findDS3Process()
-			if err != nil {
-				log.Printf("Error finding DS3 process: %v", err)
-				time.Sleep(5 * time.Second)
-				continue
-			}
+    // Start update goroutine
+    go func() {
+        for {
+            process, processID, game, err := findGameProcess()
+            if err != nil {
+                if currentGameName != "No game detected" {
+                    log.Printf("Game process closed or not found: %v", err)
+                    currentGameName = "No game detected"
+                }
+                time.Sleep(2 * time.Second)
+                continue
+            }
 
-			deaths, err := getDeathCount(process, processID)
-			if err != nil {
-				log.Printf("Error reading death count: %v", err)
-				windows.CloseHandle(process)
-				time.Sleep(5 * time.Second)
-				continue
-			}
+            if currentGameName != game.Name {
+                currentGameName = game.Name
+                log.Printf("Found game: %s", currentGameName)
+            }
 
-			if deaths != currentDeaths {
-				currentDeaths = deaths
-				log.Printf("Deaths updated: %d", currentDeaths)
-			}
+            deaths, err := getDeathCount(process, processID, game)
+            if err != nil {
+                log.Printf("Error reading death count: %v", err)
+                windows.CloseHandle(process)
+                time.Sleep(2 * time.Second)
+                continue
+            }
 
-			windows.CloseHandle(process)
-			time.Sleep(500 * time.Millisecond)
-		}
-	}()
+            if deaths != currentDeaths {
+                currentDeaths = deaths
+                log.Printf("%s deaths updated: %d", currentGameName, currentDeaths)
+            }
+
+            windows.CloseHandle(process)
+            time.Sleep(500 * time.Millisecond)
+        }
+    }()
 
 	// Web server handler
 	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
@@ -239,7 +331,7 @@ func main() {
 	})
 
 	log.Println("Starting web server on http://localhost:8080")
-	if err := http.ListenAndServe(":8080", nil); err != nil {
+	if err := http.ListenAndServe("127.0.0.1:8080", nil); err != nil {
 		log.Fatal(err)
 	}
 }
