@@ -1,0 +1,71 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="UTF-8" />
+    <style>
+      @font-face {
+        font-family: "Athelas Regular";
+        src: url("https://db.onlinewebfonts.com/t/203ca707d5875159f71d2aff42401749.eot");
+        src: url("https://db.onlinewebfonts.com/t/203ca707d5875159f71d2aff42401749.eot?#iefix")
+            format("embedded-opentype"),
+          url("https://db.onlinewebfonts.com/t/203ca707d5875159f71d2aff42401749.woff2")
+            format("woff2"),
+          url("https://db.onlinewebfonts.com/t/203ca707d5875159f71d2aff42401749.woff")
+            format("woff"),
+          url("https://db.onlinewebfonts.com/t/203ca707d5875159f71d2aff42401749.ttf")
+            format("truetype"),
+          url("https://db.onlinewebfonts.com/t/203ca707d5875159f71d2aff42401749.svg#Athelas Regular")
+            format("svg");
+      }
+      body {
+        background: transparent;
+        color: #cf5614; /* Dark Souls orange */
+        font-family: "Garamond Bold";
+        font-size: 24px;
+        margin: 0;
+        text-shadow: 2px 2px 2px #000;
+        display: flex;
+        align-items: center;
+      }
+      #counter {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+      }
+      img {
+        height: 3em;
+        width: auto;
+        vertical-align: middle;
+        mix-blend-mode: screen;
+        transform: scaleX(-1);
+      }
+    </style>
+  </head>
+  <body>
+    <div id="counter" data-game="SEKIRO">
+      <img src="/static/images/sekirodeath.png" alt="skull" />
+      <div>DEATHS: <span id="deaths">{{.Deaths}}</span></div>
+    </div>
+
+    <script>
+      function updateDeaths() {
+        fetch(window.location.href)
+          .then((response) => response.text())
+          .then((html) => {
+            const parser = new DOMParser();
+            const doc = parser.parseFromString(html, "text/html");
+            const newDeaths = doc.getElementById("deaths").textContent;
+            document.getElementById("deaths").textContent = newDeaths;
+
+            if (
+              !doc.querySelector("#counter") ||
+              doc.querySelector("#counter").dataset.game !== "SEKIRO"
+            ) {
+              window.location.reload();
+            }
+          });
+      }
+      setInterval(updateDeaths, 1000);
+    </script>
+  </body>
+</html>

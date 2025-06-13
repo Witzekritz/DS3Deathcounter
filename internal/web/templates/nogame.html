@@ -1,0 +1,59 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="UTF-8" />
+    <style>
+      @font-face {
+        font-family: "Garamond Bold";
+        src: url("https://db.onlinewebfonts.com/t/4a7a8bacf63ac3e32b8cd692363de2a9.eot");
+        src: url("https://db.onlinewebfonts.com/t/4a7a8bacf63ac3e32b8cd692363de2a9.eot?#iefix")
+            format("embedded-opentype"),
+          url("https://db.onlinewebfonts.com/t/4a7a8bacf63ac3e32b8cd692363de2a9.woff2")
+            format("woff2"),
+          url("https://db.onlinewebfonts.com/t/4a7a8bacf63ac3e32b8cd692363de2a9.woff")
+            format("woff"),
+          url("https://db.onlinewebfonts.com/t/4a7a8bacf63ac3e32b8cd692363de2a9.ttf")
+            format("truetype"),
+          url("https://db.onlinewebfonts.com/t/4a7a8bacf63ac3e32b8cd692363de2a9.svg#Garamond Bold")
+            format("svg");
+      }
+      body {
+        background: transparent;
+        color: #888;
+        font-family: "Garamond Bold";
+        font-size: 24px;
+        margin: 0;
+        text-shadow: 2px 2px 2px #000;
+        display: flex;
+        align-items: center;
+      }
+      #message {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+      }
+      img {
+        height: 3em;
+        width: auto;
+        vertical-align: middle;
+        mix-blend-mode: screen;
+        opacity: 0.5;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="message">WAITING FOR GAME...</div>
+    <script>
+      function checkForGame() {
+        fetch(window.location.href)
+          .then((response) => response.text())
+          .then((html) => {
+            if (!html.includes("WAITING FOR GAME")) {
+              window.location.reload();
+            }
+          });
+      }
+      setInterval(checkForGame, 2000);
+    </script>
+  </body>
+</html>
